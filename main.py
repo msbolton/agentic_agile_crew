@@ -59,26 +59,73 @@ def load_product_idea(product_idea=None):
         print("\nNo product idea found in examples. Please describe your product idea:")
         return input("> ")
 
-def main(product_idea=None, with_human_review=False):
+def main(product_idea=None, with_human_review=False, with_jira=False):
     """
     Main application function.
     
     Args:
         product_idea: Optional product idea text. If not provided, will load from file or prompt.
         with_human_review: Whether to include human-in-the-loop reviews.
+        with_jira: Whether to enable JIRA integration.
     """
     print("\n===== Agentic Agile Crew =====\n")
     
-    # Initialize human review manager if needed
+    # Initialize managers
     review_manager = None
     workflow_adapter = None
+    artifact_manager = None
+    jira_connector = None
+    
+    # Set up artifact management
+    try:
+        from src.artifacts.manager import ArtifactManager
+        artifact_manager = ArtifactManager()
+        print("Artifact management enabled.")
+    except ImportError:
+        print("Artifact management not available.")
+    
+    # Set up JIRA integration if requested
+    if with_jira:
+        try:
+            from src.artifacts.jira_connector import JiraConnector
+            jira_connector = JiraConnector()
+            
+            if jira_connector.is_available():
+                if jira_connector.connect():
+                    print("JIRA integration enabled and connected.")
+                else:
+                    print("Warning: JIRA integration enabled but failed to connect.")
+            else:
+                print("Warning: JIRA integration requested but configuration missing.")
+                with_jira = False
+        except ImportError:
+            print("Warning: JIRA integration requested but module not available.")
+            with_jira = False
+    
+    # Initialize human review manager if needed
     if with_human_review:
         print("Human-in-the-loop mode enabled.")
         review_manager = HumanReviewManager(storage_dir=".agentic_crew")
-        workflow_adapter = WorkflowAdapter(review_manager)
+        workflow_adapter = WorkflowAdapter(
+            review_manager=review_manager,
+            artifact_manager=artifact_manager,
+            jira_connector=jira_connector,
+            jira_enabled=with_jira
+        )
     
     # Load the product idea
-    product_idea = load_product_idea(product_idea)
+    product_idea_text = load_product_idea(product_idea)
+    
+    # Extract product name for artifact organization
+    product_name = "Unknown Project"
+    if artifact_manager:
+        product_name = artifact_manager.extract_product_name(product_idea_text)
+        print(f"\nProject Name: {product_name}")
+    
+    # Set the product idea name for artifact management
+    if workflow_adapter and artifact_manager:
+        workflow_adapter.set_product_idea_name(product_name)
+    
     print("\nInitializing agents...")
     
     # Create agents
@@ -190,7 +237,8 @@ def main(product_idea=None, with_human_review=False):
     return result
 
 if __name__ == "__main__":
-    # Check if human review is requested
+    # Parse command line arguments
     with_human_review = "--with-human-review" in sys.argv
+    with_jira = "--with-jira" in sys.argv
     
-    main(with_human_review=with_human_review)
+    main(with_human_review=with_human_review, with_jira=with_jira)

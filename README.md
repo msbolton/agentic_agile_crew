@@ -79,8 +79,44 @@ Edit the settings in `config/settings.py` to customize:
 
 | Command | Description |
 |---------|-------------|
-| `start <file>` | Start a new project with a product idea file |
+| `start <file> [--with-jira]` | Start a new project with a product idea file. Optionally enable JIRA integration |
 | `list-reviews` | List all pending review items |
 | `review <id>` | Review a specific item by its ID |
 | `status` | Show the current project status |
 | `list-completed` | List all completed reviews |
+
+## Artifact Management
+
+The system now organizes all agent outputs into artifacts that are saved for future reference. Artifacts are organized by project name and categorized by type.
+
+### Artifact Directory Structure
+
+```
+artifacts/
+├── smart_task_manager_app/              # Sanitized product name
+│   ├── business_requirements.md         # Business Analyst output
+│   ├── prd_document.md                  # Project Manager output
+│   ├── architecture_document.md         # Architect output
+│   ├── task_list.md                     # Product Owner output
+│   ├── jira_stories.md                  # Scrum Master output
+│   └── implementation_code.md           # Developer output
+└── [other_project_name]/
+    └── ...
+```
+
+### Artifact CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `list-artifacts [project_name]` | List all artifacts or artifacts for a specific project |
+| `view-artifact <project_name> <artifact_name>` | View the content of a specific artifact |
+| `export-artifacts <project_name> <export_dir>` | Export all artifacts for a project to a directory |
+
+### JIRA Integration
+
+When JIRA integration is enabled with `--with-jira`, the system will automatically create epics and stories in JIRA based on the "JIRA epics and stories" artifact. To use this feature, you need to set the following environment variables:
+
+- `JIRA_URL`: URL of your JIRA instance
+- `JIRA_USER`: Your JIRA username or email
+- `JIRA_API_TOKEN`: Your JIRA API token
+- `JIRA_PROJECT_KEY`: The key of the JIRA project
