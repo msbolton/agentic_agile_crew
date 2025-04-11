@@ -24,6 +24,7 @@ logger = logging.getLogger("human_review.workflow")
 class HumanReviewTask:
     """
     Wraps a CrewAI task to intercept its output for human review.
+    Supports feedback-driven revision cycles.
     """
     
     def __init__(
@@ -75,7 +76,12 @@ class HumanReviewTask:
                 stage_name=self.stage_name,
                 artifact_type=self.artifact_type,
                 content=output,
-                context={"task_description": self.original_task.description},
+                context={
+                    "task_description": self.original_task.description,
+                    "workflow_adapter": self.workflow_adapter,
+                    "original_task": self.original_task,
+                    "agent": self.original_task.agent
+                },
             )
             
             # Define callback for when review is complete
@@ -110,6 +116,8 @@ class HumanReviewTask:
                             logger.error(f"Error saving artifact: {e}")
                 else:
                     logger.info(f"Review rejected for {self.stage_name} with feedback: {feedback}")
+                    # Note: Rejection will now be handled by the feedback-driven revision system
+                    # in the HumanReviewManager.submit_feedback method
             
             # Submit for review with callback
             review_id = self.review_manager.request_review(request)

@@ -3,6 +3,7 @@ Human Review Manager for Agentic Agile Crew
 
 This module manages human-in-the-loop review requests and responses,
 allowing for human oversight at critical stages of the workflow.
+It now includes feedback-driven agent refinement loops.
 """
 
 import uuid
@@ -18,6 +19,12 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("human_review")
+
+# Import feedback system components
+from .feedback.parser import FeedbackParser
+from .feedback.cycle import RevisionCycle
+from .feedback.memory import FeedbackMemory
+from .feedback.limiter import CycleLimiter
 
 class HumanReviewRequest:
     """
@@ -86,19 +93,32 @@ class HumanReviewRequest:
 class HumanReviewManager:
     """
     Manages human review requests and responses in the Agentic Agile Crew.
+    Now supports feedback-driven agent refinement loops.
     """
-    def __init__(self, storage_dir=".agentic_crew"):
+    def __init__(self, storage_dir=".agentic_crew", max_revision_cycles=5):
         """
         Initialize the human review manager.
         
         Args:
             storage_dir: Directory to store persistent data
+            max_revision_cycles: Maximum number of revision cycles allowed
         """
         self.storage_dir = storage_dir
         self._ensure_storage_exists()
         self.pending_reviews: List[HumanReviewRequest] = []
         self.completed_reviews: List[Dict[str, Any]] = []
         self.callbacks: Dict[str, Callable] = {}
+        
+        # Initialize feedback system components
+        self.feedback_memory = FeedbackMemory(storage_dir=storage_dir)
+        self.cycle_limiter = CycleLimiter(max_cycles=max_revision_cycles)
+        self.revision_cycle = RevisionCycle(
+            feedback_memory=self.feedback_memory,
+            cycle_limiter=self.cycle_limiter
+        )
+        
+        # Track revision requests
+        self.revision_requests: Dict[str, Dict[str, Any]] = {}
         
         # Load saved reviews
         self._load_reviews()
@@ -223,16 +243,47 @@ class HumanReviewManager:
         completed_review["completed_at"] = datetime.now().isoformat()
         self.completed_reviews.append(completed_review)
         
-        # Execute callback if available
-        callback = self.callbacks.get(review_id)
-        if callback:
-            try:
-                logger.info(f"Executing callback for review {review_id}")
-                callback(approved, feedback)
-                # Remove the callback after execution
-                del self.callbacks[review_id]
-            except Exception as e:
-                logger.error(f"Error executing callback for review {review_id}: {e}")
+        # If rejected, start a revision cycle (unless it's a revision that's being rejected)
+        revision_started = False
+        if not approved and not review_id.startswith("revision_"):
+            # Get the original workflow adapter from the context if available
+            workflow_adapter = request.context.get("workflow_adapter")
+            original_task = request.context.get("original_task")
+            agent = request.context.get("agent")
+            
+            if workflow_adapter and original_task and agent:
+                # Start a revision cycle
+                try:
+                    revision_started = self._start_revision_cycle(
+                        request.id,
+                        request.agent_id,
+                        request.stage_name,
+                        request.artifact_type,
+                        request.content,
+                        feedback,
+                        agent,
+                        original_task,
+                        workflow_adapter
+                    )
+                    
+                    if revision_started:
+                        logger.info(f"Started revision cycle for {request.id}")
+                    else:
+                        logger.warning(f"Failed to start revision cycle for {request.id}")
+                except Exception as e:
+                    logger.error(f"Error starting revision cycle: {e}")
+        
+        # Execute callback if available and a revision wasn't started
+        if not revision_started:
+            callback = self.callbacks.get(review_id)
+            if callback:
+                try:
+                    logger.info(f"Executing callback for review {review_id}")
+                    callback(approved, feedback)
+                    # Remove the callback after execution
+                    del self.callbacks[review_id]
+                except Exception as e:
+                    logger.error(f"Error executing callback for review {review_id}: {e}")
         
         # Remove from pending
         self.pending_reviews.remove(request)
@@ -243,3 +294,196 @@ class HumanReviewManager:
         
         logger.info(f"Review {review_id} completed with status: {request.status}")
         return True
+    
+    def _start_revision_cycle(
+        self,
+        original_review_id: str,
+        agent_id: str,
+        stage_name: str,
+        artifact_type: str,
+        original_content: Any,
+        feedback: str,
+        agent: Any,
+        original_task: Any,
+        workflow_adapter: Any
+    ) -> bool:
+        """
+        Start a revision cycle for rejected content.
+        
+        Args:
+            original_review_id: ID of the original review
+            agent_id: ID of the agent
+            stage_name: Name of the workflow stage
+            artifact_type: Type of artifact being revised
+            original_content: Original content to be revised
+            feedback: Feedback from the reviewer
+            agent: The agent that will perform the revision
+            original_task: The original task
+            workflow_adapter: The workflow adapter
+            
+        Returns:
+            True if revision cycle was started successfully
+        """
+        try:
+            # Define callback for when revision is complete
+            def on_revision_complete(revised_content: Any, status: str):
+                # Create a new review request for the revised content
+                revision_request = HumanReviewRequest(
+                    agent_id=agent_id,
+                    stage_name=f"{stage_name} (Revision)",
+                    artifact_type=artifact_type,
+                    content=revised_content,
+                    context={
+                        "original_review_id": original_review_id,
+                        "workflow_adapter": workflow_adapter,
+                        "original_task": original_task,
+                        "agent": agent,
+                        "revision": True,
+                        "task_description": original_task.description
+                    }
+                )
+                
+                # Use a prefix to identify revision review requests
+                revision_request.id = f"revision_{revision_request.id}"
+                
+                # Define callback for the revision review
+                def on_revision_review_complete(approved: bool, feedback: str):
+                    if approved:
+                        logger.info(f"Revision approved for {stage_name}")
+                        
+                        # Reset cycle count since the revision was successful
+                        self.cycle_limiter.reset(agent_id, stage_name)
+                        
+                        # Call the original callback that was registered for the original review
+                        original_callback = self.callbacks.get(original_review_id)
+                        if original_callback:
+                            try:
+                                logger.info(f"Executing callback for original review {original_review_id}")
+                                original_callback(True, "Approved after revision")
+                                # Remove the original callback
+                                del self.callbacks[original_review_id]
+                            except Exception as e:
+                                logger.error(f"Error executing original callback: {e}")
+                        
+                        # Save artifact if integrated with artifact system
+                        if hasattr(workflow_adapter, "artifact_manager") and workflow_adapter.artifact_manager:
+                            try:
+                                product_idea_name = workflow_adapter.product_idea_name
+                                if product_idea_name:
+                                    filepath = workflow_adapter.artifact_manager.save_artifact(
+                                        product_idea_name,
+                                        artifact_type,
+                                        revised_content
+                                    )
+                                    logger.info(f"Saved revised artifact to {filepath}")
+                            except Exception as e:
+                                logger.error(f"Error saving revised artifact: {e}")
+                        
+                        # Handle JIRA integration if needed (similar to original workflow code)
+                        if (hasattr(workflow_adapter, "jira_connector") and
+                            workflow_adapter.jira_connector and 
+                            workflow_adapter.jira_enabled and 
+                            artifact_type == "JIRA epics and stories"):
+                            try:
+                                logger.info("Creating JIRA epics and stories from revision...")
+                                results = workflow_adapter.jira_connector.create_epics_and_stories(revised_content)
+                                if results["success"]:
+                                    logger.info(f"Created {len(results.get('epics', []))} epics and {len(results.get('stories', []))} stories in JIRA")
+                                else:
+                                    logger.warning(f"Failed to create JIRA items: {results.get('error', 'Unknown error')}")
+                            except Exception as e:
+                                logger.error(f"Error creating JIRA items from revision: {e}")
+                    else:
+                        logger.info(f"Revision rejected for {stage_name} with feedback: {feedback}")
+                        
+                        # Check cycle limits before starting another revision
+                        cycle_status = self.cycle_limiter.get_status(agent_id, stage_name)
+                        
+                        if cycle_status["limit_reached"]:
+                            logger.warning(
+                                f"Maximum revision cycles reached for {agent_id} in {stage_name}. "
+                                f"Auto-approving to continue workflow."
+                            )
+                            
+                            # Force approval to continue workflow
+                            original_callback = self.callbacks.get(original_review_id)
+                            if original_callback:
+                                try:
+                                    logger.info(f"Auto-approving after max revisions for {original_review_id}")
+                                    original_callback(True, "Auto-approved after maximum revision cycles")
+                                    # Remove the original callback
+                                    del self.callbacks[original_review_id]
+                                except Exception as e:
+                                    logger.error(f"Error executing forced approval callback: {e}")
+                        else:
+                            # Start another revision cycle
+                            self._start_revision_cycle(
+                                original_review_id,
+                                agent_id,
+                                stage_name,
+                                artifact_type,
+                                revised_content,
+                                feedback,
+                                agent,
+                                original_task,
+                                workflow_adapter
+                            )
+                
+                # Register the revision review request
+                review_id = self.request_review(revision_request)
+                self.register_callback(review_id, on_revision_review_complete)
+                
+                print(f"\n[!] Revised content sent for human review. ID: {review_id}")
+                print(f"Run 'python cli.py review {review_id}' to review the revision.")
+                
+                logger.info(f"Revision complete and sent for review. ID: {review_id}")
+            
+            # Start the revision cycle
+            revision_result = self.revision_cycle.start_revision(
+                agent=agent,
+                original_task=original_task,
+                stage_name=stage_name,
+                artifact_type=artifact_type,
+                feedback=feedback,
+                original_content=original_content,
+                callback=on_revision_complete
+            )
+            
+            # Store revision information
+            revision_key = revision_result["revision_key"]
+            self.revision_requests[revision_key] = {
+                "original_review_id": original_review_id,
+                "agent_id": agent_id,
+                "stage_name": stage_name,
+                "cycle_status": revision_result["cycle_status"]
+            }
+            
+            # Execute the revision task
+            try:
+                print(f"\n[!] Starting revision cycle for {stage_name}...")
+                
+                # Execute the task and get the result
+                revised_content = revision_result["task"].execute()
+                
+                # Complete the revision cycle
+                self.revision_cycle.complete_revision(
+                    revision_key=revision_key,
+                    revised_content=revised_content
+                )
+                
+                return True
+            except Exception as e:
+                logger.error(f"Error executing revision task: {e}")
+                return False
+        except Exception as e:
+            logger.error(f"Error in revision cycle: {e}")
+            return False
+    
+    def get_active_revisions(self) -> List[Dict[str, Any]]:
+        """
+        Get information about all active revisions.
+        
+        Returns:
+            List of dictionaries with revision information
+        """
+        return self.revision_cycle.get_active_revisions()

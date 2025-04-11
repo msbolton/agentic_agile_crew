@@ -67,6 +67,19 @@ You can also run the main application with human review enabled:
 python main.py --with-human-review
 ```
 
+### Feedback-Driven Revision System
+
+The system now includes a feedback-driven revision loop that automatically routes human feedback back to agents for improvements:
+
+1. When a reviewer rejects an output with feedback, the system parses the feedback into actionable items
+2. The original agent receives the structured feedback and creates a revised version
+3. The revised output is sent for another human review
+4. This cycle continues until the output is approved or the maximum revision cycles are reached
+
+This ensures continuous improvement based on human guidance while maintaining the efficiency of AI-powered development.
+
+For more details, see [Feedback System Documentation](docs/feedback_system.md).
+
 ## Configuration
 
 Edit the settings in `config/settings.py` to customize:
@@ -84,6 +97,8 @@ Edit the settings in `config/settings.py` to customize:
 | `review <id>` | Review a specific item by its ID |
 | `status` | Show the current project status |
 | `list-completed` | List all completed reviews |
+| `list-revisions` | List active revision cycles |
+| `revision-history [agent_id] [stage_name]` | View revision history for an agent/stage |
 
 ## Artifact Management
 

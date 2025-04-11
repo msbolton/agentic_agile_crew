@@ -120,7 +120,14 @@ class TestHumanReviewManager(TestCase):
     def setUp(self):
         """Set up test environment with temporary directory"""
         self.temp_dir = tempfile.mkdtemp()
-        self.manager = HumanReviewManager(storage_dir=self.temp_dir)
+        # Create manager with mocked feedback system components
+        with mock.patch('src.human_loop.manager.FeedbackMemory') as mock_memory, \
+             mock.patch('src.human_loop.manager.CycleLimiter') as mock_limiter, \
+             mock.patch('src.human_loop.manager.RevisionCycle') as mock_cycle:
+            self.mock_memory = mock_memory.return_value
+            self.mock_limiter = mock_limiter.return_value
+            self.mock_cycle = mock_cycle.return_value
+            self.manager = HumanReviewManager(storage_dir=self.temp_dir)
     
     def tearDown(self):
         """Clean up temporary directory after tests"""
@@ -443,3 +450,224 @@ class TestHumanReviewManager(TestCase):
         # Verify review was processed correctly
         self.assertEqual(len(self.manager.pending_reviews), 0)
         self.assertEqual(len(self.manager.completed_reviews), 1)
+    
+    @mock.patch('src.human_loop.manager.RevisionCycle')
+    def test_revision_cycle_start_on_rejection(self, mock_revision_cycle_class):
+        """Test that a revision cycle is started when content is rejected"""
+        # Create a test request with workflow context
+        mock_agent = mock.MagicMock()
+        mock_agent.name = "test_agent"
+        
+        mock_task = mock.MagicMock()
+        mock_task.description = "Test task description"
+        
+        mock_workflow_adapter = mock.MagicMock()
+        
+        request = HumanReviewRequest(
+            agent_id="test_agent",
+            stage_name="test_stage",
+            artifact_type="test_artifact",
+            content="Test content",
+            context={
+                "workflow_adapter": mock_workflow_adapter,
+                "original_task": mock_task,
+                "agent": mock_agent
+            }
+        )
+        
+        # Mock revision cycle
+        mock_cycle_instance = mock.MagicMock()
+        mock_revision_cycle_class.return_value = mock_cycle_instance
+        
+        # Configure mock to return a valid revision result
+        mock_cycle_instance.start_revision.return_value = {
+            "revision_key": "test_revision_key",
+            "task": mock.MagicMock(),
+            "cycle_status": {
+                "cycle_count": 1,
+                "max_cycles": 5,
+                "limit_reached": False
+            }
+        }
+        
+        # Configure mock to return success for complete_revision
+        mock_cycle_instance.complete_revision.return_value = {
+            "success": True,
+            "agent_id": "test_agent",
+            "stage_name": "test_stage",
+            "cycle_count": 1,
+            "status": "completed"
+        }
+        
+        # Add to pending reviews
+        self.manager.pending_reviews.append(request)
+        self.manager.revision_cycle = mock_cycle_instance
+        
+        # Submit rejection feedback
+        feedback = "Please add a security section"
+        result = self.manager.submit_feedback(
+            review_id=request.id,
+            approved=False,
+            feedback=feedback
+        )
+        
+        # Verify result
+        self.assertTrue(result)
+        
+        # Verify revision cycle was started
+        mock_cycle_instance.start_revision.assert_called_once()
+        call_args = mock_cycle_instance.start_revision.call_args[1]
+        
+        self.assertEqual(call_args["agent"], mock_agent)
+        self.assertEqual(call_args["original_task"], mock_task)
+        self.assertEqual(call_args["stage_name"], "test_stage")
+        self.assertEqual(call_args["artifact_type"], "test_artifact")
+        self.assertEqual(call_args["feedback"], feedback)
+        self.assertEqual(call_args["original_content"], "Test content")
+        
+        # Verify revision was completed
+        mock_cycle_instance.complete_revision.assert_called_once()
+    
+    def test_revision_rejected_starts_another_cycle(self):
+        """Test that rejecting a revision starts another cycle"""
+        # This would be a more complex test involving multiple rejection/revision cycles
+        # For this test, we'll use the mocked revision_cycle and a simulated revision review
+        
+        # Create a revision review request (as if it was created by the revision process)
+        original_review_id = "original-123"
+        
+        mock_agent = mock.MagicMock()
+        mock_agent.name = "test_agent"
+        
+        mock_task = mock.MagicMock()
+        mock_workflow_adapter = mock.MagicMock()
+        
+        revision_request = HumanReviewRequest(
+            agent_id="test_agent",
+            stage_name="test_stage (Revision)",
+            artifact_type="test_artifact",
+            content="Revised content",
+            context={
+                "original_review_id": original_review_id,
+                "workflow_adapter": mock_workflow_adapter,
+                "original_task": mock_task,
+                "agent": mock_agent,
+                "revision": True
+            }
+        )
+        
+        # Set a unique ID for revision request
+        revision_request.id = "revision_unique-123"
+        
+        # Add to pending reviews
+        self.manager.pending_reviews.append(revision_request)
+        
+        # Store original callback to simulate the full flow
+        original_callback = mock.MagicMock()
+        self.manager.callbacks[original_review_id] = original_callback
+        
+        # Mock the cycle_limiter to report we haven't reached the limit
+        self.mock_limiter.get_status.return_value = {
+            "cycle_count": 1,
+            "max_cycles": 5,
+            "remaining_cycles": 4,
+            "limit_reached": False
+        }
+        
+        # Mock _start_revision_cycle to track calls
+        self.manager._start_revision_cycle = mock.MagicMock(return_value=True)
+        
+        # Submit rejection feedback for the revision
+        feedback = "Still needs more details"
+        result = self.manager.submit_feedback(
+            review_id=revision_request.id,
+            approved=False,
+            feedback=feedback
+        )
+        
+        # Verify result
+        self.assertTrue(result)
+        
+        # Verify another revision cycle was started
+        self.manager._start_revision_cycle.assert_called_once()
+        call_args = self.manager._start_revision_cycle.call_args[0]
+        
+        self.assertEqual(call_args[0], original_review_id)  # original_review_id
+        self.assertEqual(call_args[1], "test_agent")  # agent_id
+        self.assertEqual(call_args[2], "test_stage")  # stage_name (without revision)
+        
+        # Original callback should not have been called yet
+        original_callback.assert_not_called()
+    
+    def test_auto_approve_after_max_cycles(self):
+        """Test auto-approval after maximum revision cycles"""
+        # Create a revision review request
+        original_review_id = "original-123"
+        
+        mock_agent = mock.MagicMock()
+        mock_task = mock.MagicMock()
+        mock_workflow_adapter = mock.MagicMock()
+        
+        revision_request = HumanReviewRequest(
+            agent_id="test_agent",
+            stage_name="test_stage (Revision)",
+            artifact_type="test_artifact",
+            content="Revised content",
+            context={
+                "original_review_id": original_review_id,
+                "workflow_adapter": mock_workflow_adapter,
+                "original_task": mock_task,
+                "agent": mock_agent,
+                "revision": True
+            }
+        )
+        
+        # Set a unique ID for revision request
+        revision_request.id = "revision_unique-123"
+        
+        # Add to pending reviews
+        self.manager.pending_reviews.append(revision_request)
+        
+        # Store original callback to simulate the full flow
+        original_callback = mock.MagicMock()
+        self.manager.callbacks[original_review_id] = original_callback
+        
+        # Mock the cycle_limiter to report we've reached the limit
+        self.mock_limiter.get_status.return_value = {
+            "cycle_count": 5,
+            "max_cycles": 5,
+            "remaining_cycles": 0,
+            "limit_reached": True
+        }
+        
+        # Submit rejection feedback for the revision
+        feedback = "Still not perfect but we've reached the limit"
+        result = self.manager.submit_feedback(
+            review_id=revision_request.id,
+            approved=False,
+            feedback=feedback
+        )
+        
+        # Verify result
+        self.assertTrue(result)
+        
+        # Verify the original callback was called with auto-approval
+        original_callback.assert_called_once()
+        call_args = original_callback.call_args[0]
+        
+        self.assertTrue(call_args[0])  # approved=True
+        self.assertIn("Auto-approved", call_args[1])  # feedback mentions auto-approval
+    
+    def test_get_active_revisions(self):
+        """Test getting active revisions"""
+        mock_revisions = [
+            {"revision_key": "key1", "agent_id": "agent1", "stage_name": "stage1"},
+            {"revision_key": "key2", "agent_id": "agent2", "stage_name": "stage2"}
+        ]
+        
+        self.mock_cycle.get_active_revisions.return_value = mock_revisions
+        
+        active_revisions = self.manager.get_active_revisions()
+        
+        self.assertEqual(active_revisions, mock_revisions)
+        self.mock_cycle.get_active_revisions.assert_called_once()

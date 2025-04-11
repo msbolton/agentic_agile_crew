@@ -415,6 +415,75 @@ def export_artifacts(args):
     except Exception as e:
         print(error_message(f"Error exporting artifacts: {e}"))
 
+def list_revisions(args):
+    """List active revision cycles"""
+    active_revisions = review_manager.get_active_revisions()
+    
+    if not active_revisions:
+        print("\nNo active revision cycles.")
+        return
+    
+    print("\n" + format_title("Active Revision Cycles"))
+    print(format_separator())
+    
+    for i, revision in enumerate(active_revisions, 1):
+        print(f"{i}. {Colors.BOLD}{revision['agent_id']}{Colors.RESET} - {revision['stage_name']}")
+        print(f"   Artifact: {revision['artifact_type']}")
+        print(f"   Cycle: {revision['cycle_count']}/{revision['max_cycles']}")
+        print(format_separator("-"))
+    
+    print("\nRevisions are automatically processed when rejected during review.")
+
+def revision_history(args):
+    """View revision history for a specific agent/stage"""
+    # Get the appropriate class instances
+    try:
+        feedback_memory = review_manager.feedback_memory
+    except AttributeError:
+        print(error_message("Revision system is not available in this version."))
+        return
+    
+    # List all available histories if no agent/stage specified
+    if not hasattr(args, 'agent_id') or not args.agent_id:
+        # This is a simplified approach - in a real implementation, you'd need
+        # to list all available agent/stage combinations from the memory
+        print("\n" + format_title("Available Revision Histories"))
+        print(format_separator())
+        print("Use 'python cli.py revision-history <agent_id> <stage_name>' to view history.")
+        return
+    
+    agent_id = args.agent_id
+    stage_name = args.stage_name
+    
+    # Get the revision history
+    history = feedback_memory.get_history(agent_id, stage_name)
+    
+    if not history.revisions:
+        print(f"\nNo revision history found for {agent_id} in stage {stage_name}.")
+        return
+    
+    print("\n" + format_title(f"Revision History: {agent_id} - {stage_name}"))
+    print(format_separator())
+    
+    for revision in history.revisions:
+        version = revision.get("version", "Unknown")
+        status = revision.get("status", "Unknown")
+        timestamp = revision.get("timestamp", "Unknown")
+        feedback = revision.get("feedback", "")
+        
+        status_str = format_approval_status(status)
+        
+        print(f"{Colors.BOLD}Version {version}{Colors.RESET} - {status_str}")
+        print(f"Created: {timestamp}")
+        
+        if feedback:
+            print("\nFeedback:")
+            print(f"{Colors.YELLOW}{feedback[:200]}{Colors.RESET}")
+            if len(feedback) > 200:
+                print("...")
+        
+        print(format_separator("-"))
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -444,6 +513,16 @@ def main():
     # List completed reviews command
     completed_parser = subparsers.add_parser("list-completed", help="List all completed reviews")
     completed_parser.set_defaults(func=list_completed)
+    
+    # List active revisions command
+    revisions_parser = subparsers.add_parser("list-revisions", help="List active revision cycles")
+    revisions_parser.set_defaults(func=list_revisions)
+    
+    # View revision history command
+    history_parser = subparsers.add_parser("revision-history", help="View revision history for an agent/stage")
+    history_parser.add_argument("agent_id", nargs="?", help="Agent ID (optional)")
+    history_parser.add_argument("stage_name", nargs="?", help="Stage name (optional)")
+    history_parser.set_defaults(func=revision_history)
     
     # Artifact commands (if available)
     if ARTIFACTS_AVAILABLE:
