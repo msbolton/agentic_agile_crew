@@ -36,8 +36,16 @@ from src.tasks.task_list_creation_task import create_task_list_creation_task
 from src.tasks.jira_creation_task import create_jira_creation_task
 from src.tasks.development_task import create_development_task
 
-def load_product_idea():
-    """Load the product idea from examples or ask the user for input."""
+# Import human-in-the-loop components
+from src.human_loop.manager import HumanReviewManager
+from src.human_loop.workflow import WorkflowAdapter
+
+def load_product_idea(product_idea=None):
+    """Load the product idea from examples, parameter, or ask the user for input."""
+    if product_idea:
+        print("Using provided product idea")
+        return product_idea
+        
     try:
         with open('examples/example_product_idea.md', 'r') as file:
             product_idea = file.read()
@@ -51,12 +59,26 @@ def load_product_idea():
         print("\nNo product idea found in examples. Please describe your product idea:")
         return input("> ")
 
-def main():
-    """Main application function."""
+def main(product_idea=None, with_human_review=False):
+    """
+    Main application function.
+    
+    Args:
+        product_idea: Optional product idea text. If not provided, will load from file or prompt.
+        with_human_review: Whether to include human-in-the-loop reviews.
+    """
     print("\n===== Agentic Agile Crew =====\n")
     
+    # Initialize human review manager if needed
+    review_manager = None
+    workflow_adapter = None
+    if with_human_review:
+        print("Human-in-the-loop mode enabled.")
+        review_manager = HumanReviewManager(storage_dir=".agentic_crew")
+        workflow_adapter = WorkflowAdapter(review_manager)
+    
     # Load the product idea
-    product_idea = load_product_idea()
+    product_idea = load_product_idea(product_idea)
     print("\nInitializing agents...")
     
     # Create agents
@@ -85,6 +107,47 @@ def main():
         developer, [jira_creation_task, architecture_design_task]
     )
     
+    # Apply human-in-the-loop wrappers if needed
+    if with_human_review and workflow_adapter:
+        print("Adding human review checkpoints...")
+        
+        # Wrap tasks with human review
+        workflow_adapter.wrap_task(
+            business_analysis_task, 
+            "business_analysis", 
+            "requirements"
+        )
+        
+        workflow_adapter.wrap_task(
+            prd_creation_task, 
+            "prd_creation", 
+            "PRD document"
+        )
+        
+        workflow_adapter.wrap_task(
+            architecture_design_task, 
+            "architecture_design", 
+            "architecture document"
+        )
+        
+        workflow_adapter.wrap_task(
+            task_list_creation_task, 
+            "task_breakdown", 
+            "task list"
+        )
+        
+        workflow_adapter.wrap_task(
+            jira_creation_task, 
+            "story_creation", 
+            "JIRA epics and stories"
+        )
+        
+        workflow_adapter.wrap_task(
+            development_task, 
+            "implementation", 
+            "implementation code"
+        )
+    
     print("Assembling the crew...")
     
     # Create the crew
@@ -111,6 +174,11 @@ def main():
     
     print("\n===== Starting Development Process =====\n")
     
+    if with_human_review:
+        print("NOTE: The process will pause at each stage for human review.")
+        print("Use the CLI to review and approve/reject each stage's output.")
+        print("Run 'python cli.py list-reviews' to see pending reviews.")
+    
     # Run the crew
     result = development_crew.kickoff()
     
@@ -122,4 +190,7 @@ def main():
     return result
 
 if __name__ == "__main__":
-    main()
+    # Check if human review is requested
+    with_human_review = "--with-human-review" in sys.argv
+    
+    main(with_human_review=with_human_review)

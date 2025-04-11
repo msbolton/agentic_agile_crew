@@ -1,0 +1,43 @@
+# Environment variables
+.env
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE specific files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Log files
+*.log
+
+# Output files
+output/
+results/
+
+# JIRA token files
+jira_token.txt
