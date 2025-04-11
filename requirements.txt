@@ -1,0 +1,6 @@
+crewai>=0.28.0
+langchain>=0.0.335
+langchain-openai>=0.0.2
+jira>=3.5.2
+python-dotenv>=1.0.0
+pydantic>=2.5.0
