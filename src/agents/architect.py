@@ -3,8 +3,8 @@ Architect Agent for the Agentic Agile Crew with enhanced reasoning capabilities
 """
 
 from crewai import Agent
-from langchain_openai import ChatOpenAI
-from config.settings import LLM_MODEL, LLM_TEMPERATURE, AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config.settings import AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config import get_agent_llm
 
 def create_architect(tools=None):
     """
@@ -17,11 +17,8 @@ def create_architect(tools=None):
     Returns:
         Agent: A CrewAI Architect agent
     """
-    # Define the LLM with slightly higher temperature for creative solutions
-    llm = ChatOpenAI(
-        model=LLM_MODEL,
-        temperature=LLM_TEMPERATURE + 0.1,  # Slightly higher for more creative thinking
-    )
+    # Get the LLM with appropriate settings for the architect role
+    llm = get_agent_llm("architect")  # Higher temperature for more creative solutions
     
     # Create the Architect agent
     return Agent(

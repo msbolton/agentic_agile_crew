@@ -3,7 +3,9 @@ langchain>=0.0.335
 langchain-openai>=0.0.2
 jira>=3.5.2
 python-dotenv>=1.0.0
-pydantic>=2.5.0
+setuptools>=65.0.0
+# CrewAI requires Pydantic v2
+pydantic>=2.4.2,<3.0.0
 
 # CLI dependencies
 argparse>=1.4.0
@@ -12,3 +14,4 @@ colorama>=0.4.6
 # Testing dependencies
 pytest>=7.4.0
 pytest-cov>=4.1.0
+setuptools>=65.0.0

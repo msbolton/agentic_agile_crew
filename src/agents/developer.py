@@ -3,8 +3,8 @@ Developer Agent for the Agentic Agile Crew
 """
 
 from crewai import Agent
-from langchain_openai import ChatOpenAI
-from config.settings import LLM_MODEL, LLM_TEMPERATURE, AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config.settings import AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config import get_agent_llm
 
 def create_developer(tools=None):
     """
@@ -17,11 +17,8 @@ def create_developer(tools=None):
     Returns:
         Agent: A CrewAI Developer agent
     """
-    # Define the LLM - with a lower temperature for more precise code generation
-    llm = ChatOpenAI(
-        model=LLM_MODEL,
-        temperature=max(0.1, LLM_TEMPERATURE - 0.1),  # Slightly lower for precise code
-    )
+    # Get the LLM with appropriate settings for the developer role
+    llm = get_agent_llm("developer")  # Lower temperature for precise code generation
     
     # Create the Developer agent
     return Agent(

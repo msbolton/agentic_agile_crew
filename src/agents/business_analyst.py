@@ -3,8 +3,8 @@ Business Analyst Agent for the Agentic Agile Crew
 """
 
 from crewai import Agent
-from langchain_openai import ChatOpenAI
-from config.settings import LLM_MODEL, LLM_TEMPERATURE, AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config.settings import AGENT_MEMORY, AGENT_ALLOW_DELEGATION
+from config import get_agent_llm
 
 def create_business_analyst(tools=None):
     """
@@ -17,11 +17,8 @@ def create_business_analyst(tools=None):
     Returns:
         Agent: A CrewAI Business Analyst agent
     """
-    # Define the LLM
-    llm = ChatOpenAI(
-        model=LLM_MODEL,
-        temperature=LLM_TEMPERATURE,
-    )
+    # Get the LLM with appropriate settings for the business analyst role
+    llm = get_agent_llm("business_analyst")  # Standard temperature
     
     # Create the Business Analyst agent
     return Agent(
