@@ -4,7 +4,7 @@ JIRA Creation Task for the Agentic Agile Crew
 
 from crewai import Task
 
-def create_jira_creation_task(agent, dependent_tasks):
+def create_jira_creation_task(agent, dependent_tasks, scrum_master_preferences=None):
     """
     Creates a task for the Scrum Master to create epics and user stories in JIRA
     based on the task list, architecture document, and PRD.
@@ -12,14 +12,29 @@ def create_jira_creation_task(agent, dependent_tasks):
     Args:
         agent (Agent): The Scrum Master agent.
         dependent_tasks (list): Tasks this task depends on, typically task list, architecture, and PRD tasks.
+        scrum_master_preferences (str, optional): Extracted preferences for the Scrum Master.
         
     Returns:
         Task: A CrewAI Task for JIRA creation.
     """
+    # Add scrum master preferences section if provided
+    scrum_prefs_section = ""
+    if scrum_master_preferences:
+        scrum_prefs_section = f"""
+        IMPORTANT - Consider these Scrum and User Story Preferences:
+        
+        {scrum_master_preferences}
+        
+        These preferences have been extracted directly from the product idea and should
+        be carefully incorporated into your epic and user story creation.
+        """
+    
     return Task(
-        description="""
+        description=f"""
         Create well-structured epics and user stories suitable for JIRA based on the 
         task list, architecture document, and PRD provided.
+        
+        {scrum_prefs_section}
         
         Your task is to transform the granular task list into properly formatted epics 
         and user stories that follow agile best practices. These should be ready for 

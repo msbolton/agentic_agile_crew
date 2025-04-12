@@ -4,7 +4,7 @@ Task List Creation Task for the Agentic Agile Crew
 
 from crewai import Task
 
-def create_task_list_creation_task(agent, dependent_tasks):
+def create_task_list_creation_task(agent, dependent_tasks, product_owner_preferences=None):
     """
     Creates a task for the Product Owner to create a granular, sequenced task list
     based on the PRD and architecture documents.
@@ -12,14 +12,29 @@ def create_task_list_creation_task(agent, dependent_tasks):
     Args:
         agent (Agent): The Product Owner agent.
         dependent_tasks (list): Tasks this task depends on, typically PRD and architecture tasks.
+        product_owner_preferences (str, optional): Extracted preferences for the Product Owner.
         
     Returns:
         Task: A CrewAI Task for task list creation.
     """
+    # Add product owner preferences section if provided
+    po_prefs_section = ""
+    if product_owner_preferences:
+        po_prefs_section = f"""
+        IMPORTANT - Consider these Product Owner Preferences in your task breakdown:
+        
+        {product_owner_preferences}
+        
+        These preferences have been extracted directly from the product idea and should
+        be carefully incorporated into your task list creation.
+        """
+    
     return Task(
-        description="""
+        description=f"""
         Create a detailed, granular, and sequenced task list based on the PRD and 
         technical architecture provided.
+        
+        {po_prefs_section}
         
         Your task is to break down the project into specific, actionable tasks that 
         will guide the development team. The task list should be comprehensive, 

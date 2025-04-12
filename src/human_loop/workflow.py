@@ -14,6 +14,7 @@ from .manager import HumanReviewManager, HumanReviewRequest
 # Optional imports
 try:
     from src.artifacts.manager import ArtifactManager
+    from src.artifacts.service import ArtifactService
     from src.artifacts.jira_connector import JiraConnector
     ARTIFACTS_AVAILABLE = True
 except ImportError:
@@ -89,15 +90,39 @@ class HumanReviewTask:
                 if approved:
                     logger.info(f"Review approved for {self.stage_name}")
                     
-                    # Save artifact if artifact management is enabled
-                    if self.workflow_adapter.artifact_manager and self.workflow_adapter.product_idea_name:
+                    # Try to save the artifact using the artifact service first
+                    if self.workflow_adapter.artifact_service:
+                        try:
+                            filepath = self.workflow_adapter.artifact_service.save_artifact(
+                                self.artifact_type,
+                                output
+                            )
+                            logger.info(f"Saved artifact to {filepath} using artifact service")
+                            
+                            # Handle JIRA integration for stories/epics
+                            if (self.workflow_adapter.jira_connector and 
+                                self.workflow_adapter.jira_enabled and 
+                                self.artifact_type == "JIRA epics and stories"):
+                                try:
+                                    logger.info("Creating JIRA epics and stories...")
+                                    results = self.workflow_adapter.jira_connector.create_epics_and_stories(output)
+                                    if results["success"]:
+                                        logger.info(f"Created {len(results.get('epics', []))} epics and {len(results.get('stories', []))} stories in JIRA")
+                                    else:
+                                        logger.warning(f"Failed to create JIRA items: {results.get('error', 'Unknown error')}")
+                                except Exception as e:
+                                    logger.error(f"Error creating JIRA items: {e}")
+                        except Exception as e:
+                            logger.error(f"Error saving artifact via service: {e}")
+                    # Fall back to using the artifact manager directly if needed
+                    elif self.workflow_adapter.artifact_manager and self.workflow_adapter.product_idea_name:
                         try:
                             filepath = self.workflow_adapter.artifact_manager.save_artifact(
                                 self.workflow_adapter.product_idea_name,
                                 self.artifact_type,
                                 output
                             )
-                            logger.info(f"Saved artifact to {filepath}")
+                            logger.info(f"Saved artifact to {filepath} using artifact manager")
                             
                             # Handle JIRA integration for stories/epics
                             if (self.workflow_adapter.jira_connector and 
@@ -145,6 +170,7 @@ class WorkflowAdapter:
         self, 
         review_manager: HumanReviewManager,
         artifact_manager: Optional[Any] = None,
+        artifact_service: Optional[Any] = None,
         jira_connector: Optional[Any] = None,
         jira_enabled: bool = False
     ):
@@ -154,11 +180,13 @@ class WorkflowAdapter:
         Args:
             review_manager: Human review manager instance
             artifact_manager: Optional artifact manager for saving artifacts
+            artifact_service: Optional artifact service for saving artifacts
             jira_connector: Optional JIRA connector for JIRA integration
             jira_enabled: Whether JIRA integration is enabled
         """
         self.review_manager = review_manager
         self.artifact_manager = artifact_manager
+        self.artifact_service = artifact_service
         self.jira_connector = jira_connector
         self.jira_enabled = jira_enabled
         self.wrapped_tasks = {}

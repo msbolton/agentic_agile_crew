@@ -57,6 +57,8 @@ from src.tasks import (
 # Import human-in-the-loop components
 from src.human_loop.manager import HumanReviewManager
 from src.human_loop.workflow import WorkflowAdapter
+from src.artifacts.service import ArtifactService
+from src.utils.task_output_saver import TaskOutputSaver
 
 def load_product_idea(product_idea=None):
     """Load the product idea from examples, parameter, or ask the user for input."""
@@ -120,12 +122,14 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     review_manager = None
     workflow_adapter = None
     artifact_manager = None
+    artifact_service = None
     jira_connector = None
     
     # Set up artifact management
     try:
         from src.artifacts.manager import ArtifactManager
         artifact_manager = ArtifactManager()
+        artifact_service = ArtifactService(artifact_manager)
         print("Artifact management enabled.")
     except ImportError:
         print("Artifact management not available.")
@@ -155,6 +159,7 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
         workflow_adapter = WorkflowAdapter(
             review_manager=review_manager,
             artifact_manager=artifact_manager,
+            artifact_service=artifact_service,
             jira_connector=jira_connector,
             jira_enabled=with_jira
         )
@@ -171,6 +176,39 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     # Set the product idea name for artifact management
     if workflow_adapter and artifact_manager:
         workflow_adapter.set_product_idea_name(product_name)
+        
+    # Set the product name for the artifact service
+    if artifact_service:
+        artifact_service.set_product_name(product_name)
+    
+    # Extract preferences from the product idea
+    print("\nExtracting preferences from product idea...")
+    business_analyst_prefs = None
+    project_manager_prefs = None
+    architect_prefs = None
+    product_owner_prefs = None
+    scrum_master_prefs = None
+    developer_prefs = None
+    
+    try:
+        from src.utils.extractors.preference_extractor import extract_all_preferences, format_preferences_for_agent
+        all_preferences = extract_all_preferences(product_idea_text)
+        
+        # Format preferences for each agent type
+        business_analyst_prefs = format_preferences_for_agent(all_preferences, "business_analyst")
+        project_manager_prefs = format_preferences_for_agent(all_preferences, "project_manager")
+        architect_prefs = format_preferences_for_agent(all_preferences, "architect") 
+        product_owner_prefs = format_preferences_for_agent(all_preferences, "product_owner")
+        scrum_master_prefs = format_preferences_for_agent(all_preferences, "scrum_master")
+        developer_prefs = format_preferences_for_agent(all_preferences, "developer")
+        
+        print("Successfully extracted and formatted preferences for all agent types")
+        if architect_prefs != "No specific preferences found.":
+            print("✅ Found technical preferences for architect")
+        if business_analyst_prefs != "No specific preferences found.":
+            print("✅ Found business requirements for business analyst")
+    except Exception as e:
+        print(f"Warning: Failed to extract preferences from product idea: {e}")
     
     print("\nInitializing agents...")
     
@@ -184,21 +222,66 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     
     print("Creating tasks...")
     
-    # Create tasks
-    business_analysis_task = create_business_analysis_task(business_analyst, product_idea)
-    prd_creation_task = create_prd_creation_task(project_manager, [business_analysis_task])
+    # Create tasks with extracted preferences
+    business_analysis_task = create_business_analysis_task(
+        business_analyst, product_idea_text, business_analyst_prefs
+    )
+    prd_creation_task = create_prd_creation_task(
+        project_manager, [business_analysis_task], project_manager_prefs
+    )
     architecture_design_task = create_architecture_design_task(
-        architect, [business_analysis_task, prd_creation_task]
+        architect, [business_analysis_task, prd_creation_task], architect_prefs
     )
     task_list_creation_task = create_task_list_creation_task(
-        product_owner, [prd_creation_task, architecture_design_task]
+        product_owner, [prd_creation_task, architecture_design_task], product_owner_prefs
     )
     jira_creation_task = create_jira_creation_task(
-        scrum_master, [task_list_creation_task, architecture_design_task, prd_creation_task]
+        scrum_master, [task_list_creation_task, architecture_design_task, prd_creation_task], scrum_master_prefs
     )
     development_task = create_development_task(
-        developer, [jira_creation_task, architecture_design_task]
+        developer, [jira_creation_task, architecture_design_task], developer_prefs
     )
+    
+    # Set up task output saver
+    task_output_saver = None
+    if artifact_service:
+        task_output_saver = TaskOutputSaver(
+            artifact_service=artifact_service,
+            jira_connector=jira_connector,
+            with_jira=with_jira
+        )
+        
+        # Define artifact types for each task
+        task_to_artifact = [
+            (business_analysis_task, "requirements", "Business Analysis"),
+            (prd_creation_task, "PRD document", "PRD Creation"),
+            (architecture_design_task, "architecture document", "Architecture Design"),
+            (task_list_creation_task, "task list", "Task Breakdown"),
+            (jira_creation_task, "JIRA epics and stories", "Story Creation"),
+            (development_task, "implementation code", "Implementation")
+        ]
+        
+        # Register tasks for output saving
+        task_output_saver.register_tasks(task_to_artifact)
+        
+        print("Automatic artifact saving enabled.")
+        
+        # Set up immediate artifact saving
+        try:
+            from src.utils.task_callbacks import create_callbacks_for_tasks
+            print("Setting up immediate artifact saving...")
+            
+            # Create callbacks for tasks
+            create_callbacks_for_tasks(
+                task_to_artifact,
+                artifact_service,
+                jira_connector,
+                with_jira
+            )
+            
+            print("✅ Immediate artifact saving enabled")
+        except Exception as e:
+            print(f"Warning: Failed to set up immediate artifact saving: {e}")
     
     # Apply human-in-the-loop wrappers if needed
     if with_human_review and workflow_adapter:
@@ -243,7 +326,7 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     
     print("Assembling the crew...")
     
-    # Create the crew
+    # Create the crew with the original tasks
     development_crew = Crew(
         agents=[
             business_analyst, 
@@ -279,6 +362,34 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     
     # Print the final result summary
     print(result)
+    
+    # We no longer need to save artifacts here since we're using immediate artifact saving
+    # with task callbacks, but keep this as a fallback method
+    if not with_human_review and task_output_saver and not hasattr(task_output_saver, '_callbacks_attached'):
+        print("\n===== Saving Artifacts (Fallback Method) =====\n")
+        
+        # Get all task outputs from the crew result
+        if hasattr(result, 'tasks_output') and result.tasks_output:
+            print(f"Found {len(result.tasks_output)} task outputs in crew result")
+            
+            for task_output in result.tasks_output:
+                if task_output and hasattr(task_output, 'task') and hasattr(task_output, 'raw_output'):
+                    task = task_output.task
+                    if task and hasattr(task, 'description'):
+                        # Save this task's output as an artifact
+                        task_output_saver.save_output(task.description, task_output.raw_output)
+        else:
+            # Fallback: Try to get outputs directly from task objects
+            print("Using fallback method to get task outputs")
+            completed_tasks = []
+            for task in development_crew.tasks:
+                if hasattr(task, 'output') and task.output:
+                    completed_tasks.append(task)
+                    
+                    # Save this task's output as an artifact
+                    task_output_saver.save_output(task.description, task.output)
+        
+        print(f"Saved artifacts for {len(completed_tasks)} completed tasks.")
     
     return result
 

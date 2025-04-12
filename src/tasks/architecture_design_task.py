@@ -4,7 +4,7 @@ Architecture Design Task for the Agentic Agile Crew
 
 from crewai import Task
 
-def create_architecture_design_task(agent, dependent_tasks):
+def create_architecture_design_task(agent, dependent_tasks, technical_preferences=None):
     """
     Creates a task for the Architect to design a technical architecture
     based on the business requirements and PRD.
@@ -12,14 +12,30 @@ def create_architecture_design_task(agent, dependent_tasks):
     Args:
         agent (Agent): The Architect agent.
         dependent_tasks (list): Tasks this task depends on, typically business analysis and PRD tasks.
+        technical_preferences (str, optional): Extracted technical preferences from the product idea.
         
     Returns:
         Task: A CrewAI Task for architecture design.
     """
+    # Add technical preferences section if provided
+    tech_prefs_section = ""
+    if technical_preferences:
+        tech_prefs_section = f"""
+        IMPORTANT - Consider these Technical Preferences in your architecture decisions:
+        
+        {technical_preferences}
+        
+        These preferences have been extracted directly from the product idea and should
+        be carefully considered in your architectural decisions. If there are any
+        conflicts or trade-offs required, explicitly explain your reasoning.
+        """
+    
     return Task(
-        description="""
+        description=f"""
         Design a comprehensive technical architecture for the product based on the 
         business requirements and PRD provided.
+        
+        {tech_prefs_section}
         
         Your task is to create a detailed technical architecture document that guides 
         implementation. For each significant architectural decision, consider at least 
