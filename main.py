@@ -54,9 +54,6 @@ from src.tasks import (
     create_development_task
 )
 
-# Import human-in-the-loop components
-from src.human_loop.manager import HumanReviewManager
-from src.human_loop.workflow import WorkflowAdapter
 from src.artifacts.service import ArtifactService
 from src.utils.task_output_saver import TaskOutputSaver
 
@@ -79,7 +76,7 @@ def load_product_idea(product_idea=None):
         print("\nNo product idea found in examples. Please describe your product idea:")
         return input("> ")
 
-def main(product_idea=None, with_human_review=False, with_jira=False, use_openrouter=False):
+def main(product_idea=None, with_jira=False, use_openrouter=False):
     # Set OpenRouter flag if passed from command line
     if use_openrouter:
         global USE_OPENROUTER
@@ -113,14 +110,11 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     
     Args:
         product_idea: Optional product idea text. If not provided, will load from file or prompt.
-        with_human_review: Whether to include human-in-the-loop reviews.
         with_jira: Whether to enable JIRA integration.
     """
     print("\n===== Agentic Agile Crew =====\n")
     
     # Initialize managers
-    review_manager = None
-    workflow_adapter = None
     artifact_manager = None
     artifact_service = None
     jira_connector = None
@@ -130,7 +124,8 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
         from src.artifacts.manager import ArtifactManager
         artifact_manager = ArtifactManager()
         artifact_service = ArtifactService(artifact_manager)
-        print("Artifact management enabled.")
+        
+        print(f"Artifact management enabled, saving to {artifact_manager.base_dir}.")
     except ImportError:
         print("Artifact management not available.")
     
@@ -152,18 +147,6 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
             print("Warning: JIRA integration requested but module not available.")
             with_jira = False
     
-    # Initialize human review manager if needed
-    if with_human_review:
-        print("Human-in-the-loop mode enabled.")
-        review_manager = HumanReviewManager(storage_dir=".agentic_crew")
-        workflow_adapter = WorkflowAdapter(
-            review_manager=review_manager,
-            artifact_manager=artifact_manager,
-            artifact_service=artifact_service,
-            jira_connector=jira_connector,
-            jira_enabled=with_jira
-        )
-    
     # Load the product idea
     product_idea_text = load_product_idea(product_idea)
     
@@ -172,12 +155,8 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     if artifact_manager:
         product_name = artifact_manager.extract_product_name(product_idea_text)
         print(f"\nProject Name: {product_name}")
-    
-    # Set the product idea name for artifact management
-    if workflow_adapter and artifact_manager:
-        workflow_adapter.set_product_idea_name(product_name)
         
-    # Set the product name for the artifact service
+    # Set the product name for the artifact services
     if artifact_service:
         artifact_service.set_product_name(product_name)
     
@@ -207,6 +186,14 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
             print("✅ Found technical preferences for architect")
         if business_analyst_prefs != "No specific preferences found.":
             print("✅ Found business requirements for business analyst")
+        if developer_prefs != "No specific preferences found.":
+            print("✅ Found development preferences for developer")
+        if product_owner_prefs != "No specific preferences found.":
+            print("✅ Found product owner preferences for product owner")
+        if scrum_master_prefs != "No specific preferences found.":
+            print("✅ Found scrum and user story preferences for scrum master")
+        if project_manager_prefs != "No specific preferences found.":
+            print("✅ Found project management preferences for project manager")
     except Exception as e:
         print(f"Warning: Failed to extract preferences from product idea: {e}")
     
@@ -263,66 +250,6 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
         
         # Register tasks for output saving
         task_output_saver.register_tasks(task_to_artifact)
-        
-        print("Automatic artifact saving enabled.")
-        
-        # Set up immediate artifact saving
-        try:
-            from src.utils.task_callbacks import create_callbacks_for_tasks
-            print("Setting up immediate artifact saving...")
-            
-            # Create callbacks for tasks
-            create_callbacks_for_tasks(
-                task_to_artifact,
-                artifact_service,
-                jira_connector,
-                with_jira
-            )
-            
-            print("✅ Immediate artifact saving enabled")
-        except Exception as e:
-            print(f"Warning: Failed to set up immediate artifact saving: {e}")
-    
-    # Apply human-in-the-loop wrappers if needed
-    if with_human_review and workflow_adapter:
-        print("Adding human review checkpoints...")
-        
-        # Wrap tasks with human review
-        workflow_adapter.wrap_task(
-            business_analysis_task, 
-            "business_analysis", 
-            "requirements"
-        )
-        
-        workflow_adapter.wrap_task(
-            prd_creation_task, 
-            "prd_creation", 
-            "PRD document"
-        )
-        
-        workflow_adapter.wrap_task(
-            architecture_design_task, 
-            "architecture_design", 
-            "architecture document"
-        )
-        
-        workflow_adapter.wrap_task(
-            task_list_creation_task, 
-            "task_breakdown", 
-            "task list"
-        )
-        
-        workflow_adapter.wrap_task(
-            jira_creation_task, 
-            "story_creation", 
-            "JIRA epics and stories"
-        )
-        
-        workflow_adapter.wrap_task(
-            development_task, 
-            "implementation", 
-            "implementation code"
-        )
     
     print("Assembling the crew...")
     
@@ -350,11 +277,6 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     
     print("\n===== Starting Development Process =====\n")
     
-    if with_human_review:
-        print("NOTE: The process will pause at each stage for human review.")
-        print("Use the CLI to review and approve/reject each stage's output.")
-        print("Run 'python cli.py list-reviews' to see pending reviews.")
-    
     # Run the crew
     result = development_crew.kickoff()
     
@@ -363,10 +285,8 @@ def main(product_idea=None, with_human_review=False, with_jira=False, use_openro
     # Print the final result summary
     print(result)
     
-    # We no longer need to save artifacts here since we're using immediate artifact saving
-    # with task callbacks, but keep this as a fallback method
-    if not with_human_review and task_output_saver and not hasattr(task_output_saver, '_callbacks_attached'):
-        print("\n===== Saving Artifacts (Fallback Method) =====\n")
+    if task_output_saver:
+        print("\n===== Saving Artifacts =====\n")
         
         # Get all task outputs from the crew result
         if hasattr(result, 'tasks_output') and result.tasks_output:
@@ -407,8 +327,8 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   python main.py --idea "Build a task management app with AI assistance"
-  python main.py --idea-file examples/example_product_idea.md --with-human-review
-  python main.py --with-jira --with-human-review
+  python main.py --idea-file examples/example_product_idea.md
+  python main.py --with-jira
   python main.py --with-openrouter --idea "Build a chat application with AI features"
   
 Agent Roles:
@@ -418,9 +338,6 @@ Agent Roles:
   • Product Owner: Creates granular, sequenced tasks
   • Scrum Master: Creates epics and user stories for JIRA
   • Developer: Implements user stories based on specifications
-
-For more commands, try the CLI interface:
-  python cli.py --help
         """
     )
     
@@ -433,12 +350,6 @@ For more commands, try the CLI interface:
     parser.add_argument(
         "--idea-file", 
         help="Path to a file containing the product idea"
-    )
-    
-    parser.add_argument(
-        "--with-human-review", 
-        action="store_true",
-        help="Enable human-in-the-loop review at each stage"
     )
     
     parser.add_argument(
@@ -478,7 +389,6 @@ For more commands, try the CLI interface:
     # Run the main function with parsed arguments
     main(
         product_idea=product_idea,
-        with_human_review=args.with_human_review,
         with_jira=args.with_jira,
         use_openrouter=args.with_openrouter
     )

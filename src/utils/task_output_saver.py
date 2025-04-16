@@ -35,9 +35,6 @@ class TaskOutputSaver:
         # Map of task descriptions to artifact types
         self.task_to_artifact_map = {}
         
-        # Flag to track whether callbacks are attached
-        self._callbacks_attached = False
-        
         logger.info("Initialized TaskOutputSaver")
     
     def register_task(self, task_description, artifact_type, task_name=None):
@@ -177,29 +174,29 @@ class TaskOutputSaver:
                 logger.warning(f"Empty content extracted for task: {task_name}")
                 content = f"Empty content for {task_name}"
             
-            # Save the artifact
-            filepath = self.artifact_service.save_artifact(artifact_type, content)
-            
-            if filepath:
-                logger.info(f"Artifact saved to: {filepath}")
-                print(f"Artifact saved to: {filepath}")
+            # Save the artifact using the artifact service
+            filepath = None
+            if self.artifact_service:
+                filepath = self.artifact_service.save_artifact(artifact_type, content)
+                
+                if filepath:
+                    logger.info(f"Artifact saved to: {filepath}")
+                    print(f"Artifact saved to: {filepath}")
+                else:
+                    logger.warning("Failed to save artifact")
+                    print("Failed to save artifact")
                 
                 # Handle JIRA integration if needed
-                if self.with_jira and artifact_type == "JIRA epics and stories" and self.jira_connector:
-                    logger.info("Creating JIRA epics and stories...")
-                    print("Creating JIRA epics and stories...")
-                    
+                if self.with_jira and self.jira_connector and artifact_type == "JIRA epics and stories":
                     try:
+                        logger.info("Creating JIRA epics and stories...")
                         results = self.jira_connector.create_epics_and_stories(content)
                         if results["success"]:
                             logger.info(f"Created {len(results.get('epics', []))} epics and {len(results.get('stories', []))} stories in JIRA")
-                            print(f"Created {len(results.get('epics', []))} epics and {len(results.get('stories', []))} stories in JIRA")
                         else:
                             logger.warning(f"Failed to create JIRA items: {results.get('error', 'Unknown error')}")
-                            print(f"Failed to create JIRA items: {results.get('error', 'Unknown error')}")
                     except Exception as e:
                         logger.error(f"Error creating JIRA items: {e}")
-                        print(f"Error creating JIRA items: {e}")
                 
                 return filepath
             

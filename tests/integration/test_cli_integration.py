@@ -1,8 +1,8 @@
 """
-Integration tests for CLI interface with human-in-the-loop workflow.
+Integration tests for CLI interface with artifact management.
 
-These tests verify that the CLI correctly interacts with the review system
-and workflow components.
+These tests verify that the CLI correctly interacts with the artifact
+management components.
 """
 
 import os
@@ -18,13 +18,12 @@ import argparse
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Import our CLI and review components
+# Import our CLI
 import cli
-from src.human_loop.manager import HumanReviewManager, HumanReviewRequest
 
 
 class TestCLIIntegration(TestCase):
-    """Integration tests for CLI interface with human review workflow"""
+    """Integration tests for CLI interface with artifact management"""
     
     def setUp(self):
         """Set up test environment"""
@@ -36,198 +35,173 @@ class TestCLIIntegration(TestCase):
         with open(self.idea_file, "w") as f:
             f.write("# Test Product Idea\n\nThis is a test product idea for unit testing.")
         
-        # Mock the review manager to use our test directory
-        self.original_review_manager = cli.review_manager
-        cli.review_manager = HumanReviewManager(storage_dir=self.temp_dir)
+        # Save original state to restore in tearDown
+        self.original_artifact_manager = cli.artifact_manager
+        self.original_artifact_available = cli.ARTIFACTS_AVAILABLE
     
     def tearDown(self):
         """Clean up after tests"""
-        # Restore original review manager
-        cli.review_manager = self.original_review_manager
+        # Restore original state
+        cli.artifact_manager = self.original_artifact_manager
+        cli.ARTIFACTS_AVAILABLE = self.original_artifact_available
         
         # Clean up temp directory
         shutil.rmtree(self.temp_dir)
     
-    def test_list_reviews_with_actual_reviews(self):
-        """Test listing reviews with actual review data"""
-        # Create some test review requests
-        request1 = HumanReviewRequest(
-            agent_id="business_analyst",
-            stage_name="business_analysis",
-            artifact_type="requirements",
-            content="Test requirements"
-        )
+    def test_start_project_calls_main(self):
+        """Test that start_project correctly calls the main function"""
+        # Mock the main function
+        with mock.patch('main.main') as mock_main:
+            mock_main.return_value = "Test result"
+            
+            # Set up the CLI to use our test directory
+            cli.ARTIFACTS_AVAILABLE = True
+            mock_artifact_manager = mock.MagicMock()
+            mock_artifact_manager.extract_product_name.return_value = "Test Project"
+            mock_artifact_manager.sanitize_directory_name.return_value = "test_project"
+            cli.artifact_manager = mock_artifact_manager
+            
+            # Call start_project
+            with mock.patch("builtins.print"):
+                args = argparse.Namespace(
+                    idea_file=self.idea_file,
+                    with_jira=False,
+                    with_openrouter=False
+                )
+                cli.start_project(args)
+            
+            # Verify main was called with the right arguments
+            mock_main.assert_called_once()
+            args, kwargs = mock_main.call_args
+            self.assertIn("product_idea", kwargs)
+            self.assertIn("with_jira", kwargs)
+            self.assertIn("use_openrouter", kwargs)
+            self.assertFalse(kwargs["with_jira"])
+            self.assertFalse(kwargs["use_openrouter"])
+    
+    def test_list_artifacts_with_no_projects(self):
+        """Test listing artifacts when no projects exist"""
+        # Set up the CLI to use our test directory
+        cli.ARTIFACTS_AVAILABLE = True
+        mock_artifact_manager = mock.MagicMock()
+        mock_artifact_manager.base_dir = self.temp_dir
+        cli.artifact_manager = mock_artifact_manager
         
-        request2 = HumanReviewRequest(
-            agent_id="project_manager",
-            stage_name="prd_creation",
-            artifact_type="PRD document",
-            content="Test PRD document"
-        )
-        
-        # Add reviews to pending list
-        cli.review_manager.request_review(request1)
-        cli.review_manager.request_review(request2)
-        
-        # Call list_reviews
+        # Call list_artifacts
         with mock.patch("builtins.print") as mock_print:
             args = argparse.Namespace()
-            cli.list_reviews(args)
+            cli.list_artifacts(args)
             
-            # Verify output contains review information
-            mock_print.assert_any_call(mock.ANY)  # Title
+            # Verify output message about no projects
+            mock_print.assert_any_call("\nNo project artifacts found.")
+    
+    def test_list_artifacts_with_projects(self):
+        """Test listing artifacts when projects exist"""
+        # Create a test project directory
+        project_dir = os.path.join(self.temp_dir, "test_project")
+        os.makedirs(project_dir)
+        
+        # Create test artifact files
+        with open(os.path.join(project_dir, "requirements.md"), "w") as f:
+            f.write("Test requirements")
+        
+        # Set up the CLI to use our test directory
+        cli.ARTIFACTS_AVAILABLE = True
+        mock_artifact_manager = mock.MagicMock()
+        mock_artifact_manager.base_dir = self.temp_dir
+        cli.artifact_manager = mock_artifact_manager
+        
+        # Call list_artifacts
+        with mock.patch("builtins.print") as mock_print:
+            args = argparse.Namespace()
+            cli.list_artifacts(args)
             
-            # Check that both reviews are mentioned
+            # Verify output contains project information
+            mock_print.assert_any_call("\nAvailable Projects:")
+            
+            # Verify project info was printed
             prints = [call[0][0] for call in mock_print.call_args_list if isinstance(call[0][0], str)]
-            business_analyst_mentioned = any("business_analyst" in p for p in prints)
-            project_manager_mentioned = any("project_manager" in p for p in prints)
-            
-            self.assertTrue(business_analyst_mentioned)
-            self.assertTrue(project_manager_mentioned)
+            self.assertTrue(any("Test Project" in p for p in prints))
+            self.assertTrue(any("Artifacts: 1" in p for p in prints))
     
-    def test_review_item_approval(self):
-        """Test reviewing an item with approval"""
-        # Create a test review request
-        request = HumanReviewRequest(
-            agent_id="architect",
-            stage_name="architecture_design",
-            artifact_type="architecture document",
-            content="Test architecture document"
-        )
+    def test_view_artifact(self):
+        """Test viewing an artifact"""
+        # Create a test project directory
+        project_dir = os.path.join(self.temp_dir, "test_project")
+        os.makedirs(project_dir)
         
-        # Add review to pending list
-        review_id = cli.review_manager.request_review(request)
+        # Create test artifact file
+        artifact_content = "# Test Requirements\n\nThis is a test artifact."
+        with open(os.path.join(project_dir, "requirements.md"), "w") as f:
+            f.write(artifact_content)
         
-        # Record callback execution
-        callback_executed = False
-        callback_approved = None
-        callback_feedback = None
+        # Set up the CLI to use our test directory
+        cli.ARTIFACTS_AVAILABLE = True
+        mock_artifact_manager = mock.MagicMock()
+        mock_artifact_manager.base_dir = self.temp_dir
+        cli.artifact_manager = mock_artifact_manager
         
-        def test_callback(approved, feedback):
-            nonlocal callback_executed, callback_approved, callback_feedback
-            callback_executed = True
-            callback_approved = approved
-            callback_feedback = feedback
-        
-        # Register callback
-        cli.review_manager.register_callback(review_id, test_callback)
-        
-        # Mock user input for approval
-        with mock.patch("builtins.input", side_effect=["yes", "Great work!"]):
-            with mock.patch("builtins.print"):
-                with mock.patch("cli.clear_screen"):
-                    # Call review_item
-                    args = argparse.Namespace(review_id=review_id)
-                    cli.review_item(args)
-        
-        # Verify callback was executed with approval
-        self.assertTrue(callback_executed)
-        self.assertTrue(callback_approved)
-        self.assertEqual(callback_feedback, "Great work!")
-        
-        # Verify review was moved to completed
-        self.assertEqual(len(cli.review_manager.get_pending_reviews()), 0)
-        self.assertEqual(len(cli.review_manager.get_completed_reviews()), 1)
-        
-        # Verify completed review has correct status
-        completed = cli.review_manager.get_completed_reviews()[0]
-        self.assertEqual(completed["status"], "approved")
-        self.assertEqual(completed["feedback"], "Great work!")
-    
-    def test_review_item_rejection(self):
-        """Test reviewing an item with rejection"""
-        # Create a test review request
-        request = HumanReviewRequest(
-            agent_id="product_owner",
-            stage_name="task_breakdown",
-            artifact_type="task list",
-            content="Test task list"
-        )
-        
-        # Add review to pending list
-        review_id = cli.review_manager.request_review(request)
-        
-        # Record callback execution
-        callback_executed = False
-        callback_approved = None
-        callback_feedback = None
-        
-        def test_callback(approved, feedback):
-            nonlocal callback_executed, callback_approved, callback_feedback
-            callback_executed = True
-            callback_approved = approved
-            callback_feedback = feedback
-        
-        # Register callback
-        cli.review_manager.register_callback(review_id, test_callback)
-        
-        # Mock user input for rejection
-        with mock.patch("builtins.input", side_effect=["no", "Need more detailed tasks"]):
-            with mock.patch("builtins.print"):
-                with mock.patch("cli.clear_screen"):
-                    # Call review_item
-                    args = argparse.Namespace(review_id=review_id)
-                    cli.review_item(args)
-        
-        # Verify callback was executed with rejection
-        self.assertTrue(callback_executed)
-        self.assertFalse(callback_approved)
-        self.assertEqual(callback_feedback, "Need more detailed tasks")
-        
-        # Verify review was moved to completed
-        self.assertEqual(len(cli.review_manager.get_pending_reviews()), 0)
-        self.assertEqual(len(cli.review_manager.get_completed_reviews()), 1)
-        
-        # Verify completed review has correct status
-        completed = cli.review_manager.get_completed_reviews()[0]
-        self.assertEqual(completed["status"], "rejected")
-        self.assertEqual(completed["feedback"], "Need more detailed tasks")
-    
-    def test_project_status_with_reviews(self):
-        """Test project status display with actual review data"""
-        # Create and process some reviews
-        # Approved business analysis
-        request1 = HumanReviewRequest(
-            agent_id="business_analyst",
-            stage_name="business_analysis",
-            artifact_type="requirements",
-            content="Test requirements"
-        )
-        review_id1 = cli.review_manager.request_review(request1)
-        cli.review_manager.submit_feedback(review_id1, True, "Good")
-        
-        # Rejected PRD
-        request2 = HumanReviewRequest(
-            agent_id="project_manager",
-            stage_name="prd_creation",
-            artifact_type="PRD document",
-            content="Test PRD document"
-        )
-        review_id2 = cli.review_manager.request_review(request2)
-        cli.review_manager.submit_feedback(review_id2, False, "Needs work")
-        
-        # Pending architecture
-        request3 = HumanReviewRequest(
-            agent_id="architect",
-            stage_name="architecture_design",
-            artifact_type="architecture document",
-            content="Test architecture document"
-        )
-        cli.review_manager.request_review(request3)
-        
-        # Call project_status
+        # Call view_artifact
         with mock.patch("builtins.print") as mock_print:
-            args = argparse.Namespace()
-            cli.project_status(args)
+            args = argparse.Namespace(
+                project_name="test_project",
+                artifact_name="requirements.md"
+            )
+            cli.view_artifact(args)
             
-            # Verify output contains status information
-            prints = [str(call[0][0]) for call in mock_print.call_args_list if len(call[0]) > 0]
+            # Verify artifact content was printed
+            prints = [call[0][0] for call in mock_print.call_args_list if isinstance(call[0][0], str)]
             
-            # Check for expected status indicators
-            approved_status = any("Completed and approved" in p for p in prints)
-            rejected_status = any("Completed but rejected" in p for p in prints)
-            pending_status = any("Awaiting review" in p for p in prints)
+            # Check that the content is in the output
+            content_printed = False
+            for p in prints:
+                if artifact_content in p:
+                    content_printed = True
+                    break
             
-            self.assertTrue(approved_status)
-            self.assertTrue(rejected_status)
-            self.assertTrue(pending_status)
+            self.assertTrue(content_printed)
+    
+    def test_export_artifacts(self):
+        """Test exporting artifacts"""
+        # Create a test project directory
+        project_dir = os.path.join(self.temp_dir, "test_project")
+        os.makedirs(project_dir)
+        
+        # Create test artifact files
+        with open(os.path.join(project_dir, "requirements.md"), "w") as f:
+            f.write("Test requirements")
+        
+        with open(os.path.join(project_dir, "architecture.md"), "w") as f:
+            f.write("Test architecture")
+        
+        # Create export directory
+        export_dir = os.path.join(self.temp_dir, "export")
+        os.makedirs(export_dir)
+        
+        # Set up the CLI to use our test directory
+        cli.ARTIFACTS_AVAILABLE = True
+        mock_artifact_manager = mock.MagicMock()
+        mock_artifact_manager.base_dir = self.temp_dir
+        cli.artifact_manager = mock_artifact_manager
+        
+        # Call export_artifacts
+        with mock.patch("builtins.print") as mock_print:
+            args = argparse.Namespace(
+                project_name="test_project",
+                export_dir=export_dir
+            )
+            cli.export_artifacts(args)
+            
+            # Verify files were exported
+            export_files = os.listdir(export_dir)
+            self.assertIn("requirements.md", export_files)
+            self.assertIn("architecture.md", export_files)
+            
+            # Verify success message was printed
+            success_message_printed = False
+            for call in mock_print.call_args_list:
+                if len(call[0]) > 0 and isinstance(call[0][0], str) and "Successfully exported" in call[0][0]:
+                    success_message_printed = True
+                    break
+            
+            self.assertTrue(success_message_printed)

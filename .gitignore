@@ -42,8 +42,7 @@ results/
 # JIRA token files
 jira_token.txt
 
-# Generated artifacts
-artifacts/
-
 # Human review storage
 .agentic_crew/
+.aider*
+.claude
